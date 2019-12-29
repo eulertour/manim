@@ -8,7 +8,8 @@ from manimlib.web.utils import (
     mobject_to_json,
     serialize_scene,
     scene_diff,
-    update_mobject_serializations,
+    update_initial_mobject_serializations,
+    update_current_mobject_serializations,
 )
 from manimlib.mobject.mobject import Mobject, Group
 from manimlib.mobject.svg.tex_mobject import (
@@ -24,6 +25,7 @@ class WebScene(Scene):
         self.animation_diffs = []
         self.initial_mobject_serializations = {}
         self.last_scene = []
+        self.current_mobject_serializations = {}
 
         # A list of snapshots of the Scene before each Animation
         self.scenes_before_animation = []
@@ -37,15 +39,33 @@ class WebScene(Scene):
         # Regular Scenes render upon instantiation.
         return super(WebScene, self).__init__(**self.render_kwargs)
 
+    # TODO: Rather than computing diffs between scenes, use the
+    # current_mobject_serializations dict.
     def play(self, *args, **kwargs):
+        animation = args[0]
+
         # Compute scene diff
-        self.initial_mobject_serializations = update_mobject_serializations(self, self.initial_mobject_serializations)
+        self.initial_mobject_serializations = update_initial_mobject_serializations(
+            self,
+            self.initial_mobject_serializations,
+            # In case a Mobject being added by the Animation hasn't been seen before.
+            animation=animation,
+        )
         cur_scene = serialize_scene(self)
-        self.scene_diffs.append(scene_diff(self.last_scene, cur_scene))
+        self.scene_diffs.append(
+            scene_diff(
+                self.last_scene,
+                cur_scene,
+                self.current_mobject_serializations,
+            )
+        )
+        self.current_mobject_serializations = update_current_mobject_serializations(
+            cur_scene,
+            self.current_mobject_serializations,
+        )
         self.last_scene = cur_scene
 
 
-        animation = args[0]
         if animation.__class__.__name__.startswith("ApplyPointwiseFunction"):
             self.update_initial_mobject_dict(mobject_list=[animation.mobject])
         else:
@@ -56,10 +76,21 @@ class WebScene(Scene):
 
 
         # Compute animation diff
-        self.initial_mobject_serializations = update_mobject_serializations(self, self.initial_mobject_serializations)
+        self.initial_mobject_serializations = update_initial_mobject_serializations(self, self.initial_mobject_serializations)
         cur_scene = serialize_scene(self)
-        # TODO: Include any mobjects that are going to be animated but haven't been added to the scene.
-        self.animation_diffs.append(scene_diff(self.last_scene, cur_scene, animation=animation))
+        self.animation_diffs.append(
+            scene_diff(
+                self.last_scene,
+                cur_scene,
+                self.current_mobject_serializations,
+                animation=animation,
+                scene_diff=self.scene_diffs[len(self.scene_diffs) - 1],
+            )
+        )
+        self.current_mobject_serializations = update_current_mobject_serializations(
+            cur_scene,
+            self.current_mobject_serializations
+        )
         self.last_scene = cur_scene
 
 

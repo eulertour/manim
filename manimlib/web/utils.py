@@ -25,15 +25,18 @@ def serialize_scene(scene):
         ret.append(serialize_mobject(mob))
     return ret
 
+SUBMOBJECT_IGNORE_LIST = ["SingleStringTexMobject"]
+
 def serialize_mobject(mob):
     from manimlib.mobject.mobject import Group, Mobject
     from manimlib.mobject.types.vectorized_mobject import VMobject, VGroup
+    class_name = mob.__class__.__name__
     ret = {
         "id": id(mob),
-        "className": mob.__class__.__name__,
+        "className": class_name,
         "args": mob.args,
         "config": mob.config,
-        "submobjects": [serialize_mobject(mob) for mob in mob.submobjects],
+        "submobjects": [serialize_mobject(mob) for mob in mob.submobjects if class_name not in SUBMOBJECT_IGNORE_LIST],
         "transformations": mob.transformations,
     }
     if isinstance(mob, VMobject):
@@ -48,7 +51,13 @@ def serialize_animation(animation):
         "config": animation.config,
     }
 
-def scene_diff(starting_scene, ending_scene, animation=None):
+def scene_diff(
+    starting_scene,
+    ending_scene,
+    mobject_serializations,
+    animation=None,
+    scene_diff=None,
+):
     ret = {}
     if animation is not None:
         ret["animation"] = serialize_animation(animation)
@@ -64,16 +73,32 @@ def scene_diff(starting_scene, ending_scene, animation=None):
                     ret[starting_mobject_id] = diff
                 starting_mobject_in_ending_scene = True
                 break
+        # Mark the Mobject as removed if it isn't in the ending scene.
         if not starting_mobject_in_ending_scene:
-            ret[starting_mobject_id] = "removed"
+            ret[starting_mobject_id] = {"removed": True}
+    # Check for Mobjects that were added.
     for ending_mobject_serialization in ending_scene:
         ending_mobject_id = ending_mobject_serialization["id"]
         if not any(serialization["id"] == ending_mobject_id for serialization in starting_scene):
-            # TODO: The mobject's information must be stored here, in case it
-            # was previously used, removed, and changed offscreen.
-            ret[ending_mobject_id] = "added"
+            if ending_mobject_id in mobject_serializations:
+                # This Mobject has been added before, so save its diff to the
+                # scene_diff in case it was changed offscreen.
+                added_mobject_diff = mobject_serialization_diff(
+                    mobject_serializations[ending_mobject_id],
+                    ending_mobject_serialization,
+                )
+                if scene_diff is None:
+                    added_mobject_diff["added"] = True
+                    ret[ending_mobject_id] = added_mobject_diff
+                else:
+                    ret[ending_mobject_id] = {"added": True}
+                    scene_diff[ending_mobject_id] = added_mobject_diff
+            else:
+                ret[ending_mobject_id] = {"added": True}
+
     return ret
 
+# TODO: When a submobject is added, check for offscreen updates.
 def mobject_serialization_diff(starting_serialization, ending_serialization):
     ret = {}
     for attr in starting_serialization:
@@ -85,9 +110,9 @@ def mobject_serialization_diff(starting_serialization, ending_serialization):
             newly_removed_ids = [id for id in starting_submobject_ids if id not in ending_submobject_ids]
             persisting_ids = [id for id in starting_submobject_ids if id in ending_submobject_ids]
             for id in newly_added_ids:
-                submobjects_diff.append({id: "added"})
+                submobjects_diff.append({id: {"added": True}})
             for id in newly_removed_ids:
-                submobjects_diff.append({id: "removed"})
+                submobjects_diff.append({id: {"removed": True}})
             for id in persisting_ids:
                 starting_submobject_serialization = None
                 ending_submobject_serialization = None
@@ -114,8 +139,13 @@ def mobject_serialization_diff(starting_serialization, ending_serialization):
     return ret
 
 # TODO: Compare with default Mobject to compute changes prior to adding.
-def update_mobject_serializations(scene, mobject_serializations):
-    for scene_mobject in scene.mobjects:
+def update_initial_mobject_serializations(scene, mobject_serializations, animation=None):
+    mobjects = []
+    if animation is not None:
+        mobjects = [animation.mobject] + scene.mobjects
+    else:
+        mobjects = scene.mobjects
+    for scene_mobject in mobjects:
         # Check if the Mobjet has already been serialized.
         scene_mobject_id = id(scene_mobject)
         mobject_already_serialized = False
@@ -126,6 +156,12 @@ def update_mobject_serializations(scene, mobject_serializations):
         if not mobject_already_serialized:
             # This is a new Mobject; serialize it.
             mobject_serializations[scene_mobject_id] = serialize_mobject(scene_mobject)
+    return mobject_serializations
+
+def update_current_mobject_serializations(scene_seriaization, mobject_serializations):
+    for mobject_serialization in scene_seriaization:
+        mobject_id = mobject_serialization["id"]
+        mobject_serializations[mobject_id] = mobject_serialization
     return mobject_serializations
 
 def pointwise_function_wrapper(func):

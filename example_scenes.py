@@ -86,6 +86,16 @@ class SceneAddExample(WebScene):
         print(g.submobjects)
 
 
+class ChangeOffscreen(WebScene):
+    def construct(self):
+        s = Square()
+        self.add(s)
+        self.play(FadeOut(s))
+
+        s.shift(2 * RIGHT)
+        self.play(FadeIn(s))
+
+
 class SquareToCircle(WebScene):
     def construct(self):
         circle = Circle()
