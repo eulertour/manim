@@ -39,7 +39,6 @@ class WebScene(Scene):
 
     def play(self, *args, **kwargs):
         # Compute scene diff
-        # TODO: Include any animated mobjects.
         self.initial_mobject_serializations = update_mobject_serializations(self, self.initial_mobject_serializations)
         cur_scene = serialize_scene(self)
         self.scene_diffs.append(scene_diff(self.last_scene, cur_scene))
@@ -48,7 +47,7 @@ class WebScene(Scene):
 
         animation = args[0]
         if animation.__class__.__name__.startswith("ApplyPointwiseFunction"):
-            self.update_initial_mobject_dict(mobject_list=animation.get_args()[1:])
+            self.update_initial_mobject_dict(mobject_list=[animation.mobject])
         else:
             self.update_initial_mobject_dict(mobject_list=animation.get_args())
         self.scenes_before_animation.append(scene_mobjects_to_json(self.mobjects))
@@ -59,6 +58,7 @@ class WebScene(Scene):
         # Compute animation diff
         self.initial_mobject_serializations = update_mobject_serializations(self, self.initial_mobject_serializations)
         cur_scene = serialize_scene(self)
+        # TODO: Include any mobjects that are going to be animated but haven't been added to the scene.
         self.animation_diffs.append(scene_diff(self.last_scene, cur_scene, animation=animation))
         self.last_scene = cur_scene
 

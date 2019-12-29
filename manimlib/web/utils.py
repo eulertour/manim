@@ -1,5 +1,3 @@
-from manimlib.mobject.mobject import Group, Mobject
-from manimlib.mobject.types.vectorized_mobject import VMobject, VGroup
 import sys
 import numpy as np
 if sys.platform == "emscripten":
@@ -8,6 +6,19 @@ if sys.platform == "emscripten":
 else:
     from manimlib.web.web_mock import tex2points
 
+def serialize_arg(arg):
+    from manimlib.mobject.mobject import Mobject
+    if isinstance(arg, Mobject):
+        return id(arg)
+    else:
+        return arg
+
+def serialize_args(args):
+    return [serialize_arg(arg) for arg in args]
+
+def serialize_config(config):
+    return { k: serialize_arg(v) for (k, v) in config.items() }
+
 def serialize_scene(scene):
     ret = []
     for mob in scene.mobjects:
@@ -15,33 +26,32 @@ def serialize_scene(scene):
     return ret
 
 def serialize_mobject(mob):
-    # TODO: Save and pass args
+    from manimlib.mobject.mobject import Group, Mobject
+    from manimlib.mobject.types.vectorized_mobject import VMobject, VGroup
+    ret = {
+        "id": id(mob),
+        "className": mob.__class__.__name__,
+        "args": mob.args,
+        "config": mob.config,
+        "submobjects": [serialize_mobject(mob) for mob in mob.submobjects],
+        "transformations": mob.transformations,
+    }
     if isinstance(mob, VMobject):
-        return {
-            "id": id(mob),
-            "className": mob.__class__.__name__,
-            "config": mob.kwargs,
-            "position": mob.get_center(),
-            "style": get_mobject_style(mob),
-            "submobjects": [serialize_mobject(mob) for mob in mob.submobjects],
-            "transformations": mob.transformations,
-        }
-    elif type(mob) in [Group, Mobject, VGroup, VMobject]:
-        return {
-            "id": id(mob),
-            "className": mob.__class__.__name__,
-            "config": mob.kwargs,
-            "submobjects": [serialize_mobject(mob) for mob in mob.submobjects],
-            "transformations": mob.transformations,
-        }
-    else:
-        print(mob)
-        raise NotImplementedError("Mobject not available in javascript")
+        ret["position"] = mob.get_center()
+        ret["style"] = get_mobject_style(mob)
+    return ret
+
+def serialize_animation(animation):
+    return {
+        "className": animation.__class__.__name__,
+        "args": animation.args,
+        "config": animation.config,
+    }
 
 def scene_diff(starting_scene, ending_scene, animation=None):
     ret = {}
     if animation is not None:
-        ret["animation"] = animation.__class__.__name__
+        ret["animation"] = serialize_animation(animation)
     for starting_mobject_serialization in starting_scene:
         # Search for the Mobject in the ending scene.
         starting_mobject_id = starting_mobject_serialization["id"]
@@ -129,14 +139,16 @@ def animation_to_json(play_args, play_kwargs):
         args = animation.get_args()
         return {
           "className": animation.__class__.__name__,
-          "args": list(map(lambda mob: id(mob), args[1])),
+          "args": animation.args,
+          "config": animation.config,
           "durationSeconds": animation.run_time,
           "func": pointwise_function_wrapper(args[0]),
         }
     else:
         return {
           "className": animation.__class__.__name__,
-          "args": list(map(lambda mob: id(mob), animation.get_args())),
+          "args": animation.args,
+          "config": animation.config,
           "durationSeconds": animation.run_time,
         }
 
@@ -157,6 +169,8 @@ def scene_mobjects_to_json(mobjects):
     }, mobjects))
 
 def mobject_to_json(mob):
+    from manimlib.mobject.mobject import Group, Mobject
+    from manimlib.mobject.types.vectorized_mobject import VMobject, VGroup
     if isinstance(mob, VMobject):
         ret = {
             "className": mob.__class__.__name__,
