@@ -15,7 +15,7 @@ from manimlib.imports import *
 # for a 1920x1080 video)
 
 
-class OpeningManimExample(Scene):
+class OpeningManimExample(WebScene):
     def construct(self):
         title = TextMobject("This is some \\LaTeX")
         basel = TexMobject(
@@ -72,6 +72,20 @@ class OpeningManimExample(Scene):
         self.wait()
 
 
+class SceneAddExample(WebScene):
+    def construct(self):
+        s1 = Square()
+        s2 = Square()
+        g = Group(s1, s2)
+        self.add(g)
+
+        print(self.mobjects)
+        print(g.submobjects)
+        self.remove(s1)
+        print(self.mobjects)
+        print(g.submobjects)
+
+
 class SquareToCircle(WebScene):
     def construct(self):
         circle = Circle()
@@ -97,10 +111,10 @@ class GroupExample(WebScene):
         g2 = Group(r2, s2, c2)
 
         self.play(FadeIn(g1))
-        self.play(Transform(g1, g2))
+        self.play(ReplacementTransform(g1, g2))
 
 
-class WarpSquare(Scene):
+class WarpSquare(WebScene):
     def construct(self):
         square = Square()
         self.play(ApplyPointwiseFunction(
