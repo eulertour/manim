@@ -17,6 +17,7 @@ from manimlib.mobject.svg.tex_mobject import (
     TextMobject,
     SingleStringTexMobject,
 )
+from collections import defaultdict
 
 
 class WebScene(Scene):
@@ -37,7 +38,8 @@ class WebScene(Scene):
 
     def render(self):
         # Regular Scenes render upon instantiation.
-        return super(WebScene, self).__init__(**self.render_kwargs)
+        super(WebScene, self).__init__(**self.render_kwargs)
+        self.name_initial_mobjects()
 
     # TODO: Rather than computing diffs between scenes, use the
     # current_mobject_serializations dict.
@@ -116,6 +118,45 @@ class WebScene(Scene):
                 ]:
                     # handle the submobjects
                     self.update_initial_mobject_dict(mobject_list=mob.submobjects, include_self=False)
+
+    def name_mobject_serialization(self, serialization, id_to_name, class_to_number):
+        new_serialization = {}
+        for k, v in serialization.items():
+            if k == "id":
+                continue
+            elif k == "submobjects":
+                new_submobjects = []
+                for child_serialization in v:
+                    child_name = name_from_serialization(child_serialization, id_to_name, class_to_number)
+                    new_serialization[self.name_from_serialization(serialization, id_to_name, class_to_number)] = \
+                        self.name_from_serialization(child_serialization, id_to_name, class_to_number)
+            else:
+                new_serialization[k] = v
+        return new_serialization
+
+
+    def name_from_serialization(self, serialization, id_to_name, class_to_number):
+        mobject_id = serialization["id"]
+        if mobject_id in id_to_name:
+            return id_to_name[mobject_id]
+        else:
+            mobject_class = serialization["className"]
+            class_number = class_to_number[mobject_class] + 1
+            class_to_number[mobject_class] += 1
+            serialization_name = f"{mobject_class}{class_number}"
+            id_to_name[mobject_id] = serialization_name
+        return serialization_name
+
+
+    def name_initial_mobjects(self):
+        new_initial_mobjects = {}
+        id_to_name = defaultdict(str)
+        class_to_number = defaultdict(int)
+        for parent_mobject_serialization in self.initial_mobject_dict:
+            name = name_from_serialization(parent_mobject_serialization)
+            new_initial_mobjects[name] = name_mobject_serialization(parent_mobject_serialization, id_to_name, class_to_number)
+        return new_initial_mobjects
+
 
     def tear_down(self):
         # convert scenes_before_animation to diffs?
