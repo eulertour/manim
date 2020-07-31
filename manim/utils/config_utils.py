@@ -314,6 +314,16 @@ def _parse_cli(arg_list, input=True):
         "--config_file", help="Specify the configuration file",
     )
 
+    parser.add_argument(
+        "--use_js_renderer",
+        help="Render animations using the javascript frontend",
+        action="store_const",
+        const=True,
+    )
+    parser.add_argument(
+        "--js_renderer_path", help="Path to the javascript frontend",
+    )
+
     return parser.parse_args(arg_list)
 
 

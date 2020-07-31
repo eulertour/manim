@@ -87,7 +87,7 @@ class ThreeDScene(Scene):
         gamma=None,
         frame_center=None,
         added_anims=[],
-        **kwargs,
+        **kwargs
     ):
         """
         This method animates the movement of the camera

@@ -122,7 +122,7 @@ class Code(VGroup):
                 self.background_mobject,
                 Dot(fill_opacity=0, stroke_opacity=0),
                 *self.code,
-                **kwargs,
+                **kwargs
             )
 
         self.move_to(np.array([0, 0, 0]))
@@ -163,7 +163,7 @@ class Code(VGroup):
             line_spacing=self.line_spacing,
             alignment="right",
             font=self.font,
-            stroke_width=self.stroke_width,
+            stroke_width=self.stroke_width
         ).scale(self.scale_factor)
         return line_numbers
 
@@ -180,7 +180,7 @@ class Code(VGroup):
             tab_width=self.tab_width,
             alignment="left",
             font=self.font,
-            stroke_width=self.stroke_width,
+            stroke_width=self.stroke_width
         ).scale(self.scale_factor)
         for line_no in range(code.__len__()):
             line = code[line_no]

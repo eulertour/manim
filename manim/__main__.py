@@ -7,13 +7,17 @@ import re
 import traceback
 import importlib.util
 import types
+import grpc
 
-from .config import file_writer_config
+from .config import file_writer_config, camera_config
 from .scene.scene import Scene
 from .utils.sounds import play_error_sound
 from .utils.sounds import play_finish_sound
 from . import constants
 from .logger import logger, console
+from .grpc.impl import frame_server_impl
+from .grpc.gen import renderserver_pb2
+from .grpc.gen import renderserver_pb2_grpc
 
 
 def open_file_if_needed(file_writer):
@@ -149,6 +153,7 @@ def get_module(file_name):
             module_name = file_name[:-3].replace(os.sep, ".").split(".")[-1]
             spec = importlib.util.spec_from_file_location(module_name, file_name)
             module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
             spec.loader.exec_module(module)
             return module
         else:
@@ -162,17 +167,21 @@ def main():
     sound_on = file_writer_config["sound"]
     for SceneClass in scene_classes_to_render:
         try:
-            # By invoking, this renders the full scene
-            scene = SceneClass()
-            open_file_if_needed(scene.file_writer)
-            if sound_on:
-                play_finish_sound()
+            if camera_config["use_js_renderer"]:
+                frame_server_impl.get(SceneClass).wait_for_termination()
+            else:
+                scene = SceneClass()
+                scene.render()
+                open_file_if_needed(scene.file_writer)
+                if sound_on:
+                    play_finish_sound()
         except Exception:
             print("\n\n")
             traceback.print_exc()
             print("\n\n")
-            if sound_on:
-                play_error_sound()
+            if not camera_config["use_js_renderer"]:
+                if sound_on:
+                    play_error_sound()
 
 
 if __name__ == "__main__":

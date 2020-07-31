@@ -83,7 +83,7 @@ class OldMultiCamera(Camera):
                     shifted_camera.start_y : shifted_camera.end_y,
                     shifted_camera.start_x : shifted_camera.end_x,
                 ],
-                **kwargs,
+                **kwargs
             )
 
     def set_pixel_array(self, pixel_array, **kwargs):
@@ -94,7 +94,7 @@ class OldMultiCamera(Camera):
                     shifted_camera.start_y : shifted_camera.end_y,
                     shifted_camera.start_x : shifted_camera.end_x,
                 ],
-                **kwargs,
+                **kwargs
             )
 
     def init_background(self):

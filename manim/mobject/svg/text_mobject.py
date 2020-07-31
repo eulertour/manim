@@ -312,7 +312,6 @@ class Text(SVGMobject):
         if self.font == "":
             if NOT_SETTING_FONT_MSG != "":
                 logger.warning(NOT_SETTING_FONT_MSG)
-
         dir_name = file_writer_config["text_dir"]
         hash_name = self.text2hash()
         file_name = os.path.join(dir_name, hash_name) + ".svg"

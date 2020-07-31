@@ -54,6 +54,7 @@ class SceneTester:
 
         # By invoking this, the scene is rendered.
         self.scene = scene_object()
+        self.scene.render()
 
     def load_data(self):
         """Load the np.array of the last frame of a pre-rendered scene. If not found, throw FileNotFoundError.
@@ -70,7 +71,7 @@ class SceneTester:
 
     def test(self):
         """Compare pre-rendered frame to the frame rendered during the test."""
-        frame_data = self.scene.get_frame()
+        frame_data = self.scene.get_frame()[0]
         expected_frame_data = self.load_data()
 
         assert frame_data.shape == expected_frame_data.shape, (

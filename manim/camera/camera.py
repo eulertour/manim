@@ -82,6 +82,7 @@ class Camera(object):
         self.pixel_array_to_cairo_context = {}
         self.init_background()
         self.resize_frame_shape()
+        self.serialized_frame = []
         self.reset()
 
     def __deepcopy__(self, memo):
@@ -601,9 +602,12 @@ class Camera(object):
             if file_name:
                 self.display_multiple_background_colored_vmobject(batch, pixel_array)
             else:
-                self.display_multiple_non_background_colored_vmobjects(
-                    batch, pixel_array
-                )
+                if self.use_js_renderer:
+                    self.display_multiple_non_background_colored_vmobjects_js(batch)
+                else:
+                    self.display_multiple_non_background_colored_vmobjects(
+                        batch, pixel_array
+                    )
 
     def display_multiple_non_background_colored_vmobjects(self, vmobjects, pixel_array):
         """Displays multiple VMobjects in the cairo context, as long as they don't have
@@ -619,6 +623,23 @@ class Camera(object):
         ctx = self.get_cairo_context(pixel_array)
         for vmobject in vmobjects:
             self.display_vectorized(vmobject, ctx)
+
+    def display_multiple_non_background_colored_vmobjects_js(self, vmobjects):
+        for vmobject in vmobjects:
+            # TODO: Store a proto instead of JSON.
+            needs_redraw = False
+            point_hash = hash(tuple(vmobject.points.flatten()))
+            if vmobject.point_hash != point_hash:
+                vmobject.point_hash = point_hash
+                needs_redraw = True
+            self.serialized_frame.append(
+                {
+                    "points": vmobject.points.tolist(),
+                    "style": vmobject.get_simple_style(),
+                    "id": id(vmobject),
+                    "needs_redraw": needs_redraw,
+                }
+            )
 
     def display_vectorized(self, vmobject, ctx):
         """Displays a VMobject in the cairo context

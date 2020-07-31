@@ -278,13 +278,13 @@ class ShowPassingFlashWithThinningStrokeWidth(AnimationGroup):
                 ShowPassingFlash(
                     vmobject.deepcopy().set_stroke(width=stroke_width),
                     time_width=time_width,
-                    **kwargs,
+                    **kwargs
                 )
                 for stroke_width, time_width in zip(
                     np.linspace(0, max_stroke_width, self.n_segments),
                     np.linspace(max_time_width, 0, self.n_segments),
                 )
-            ],
+            ]
         )
 
 

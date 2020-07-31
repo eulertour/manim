@@ -2,7 +2,15 @@ import inspect
 import random
 import warnings
 import platform
+import os
+import subprocess
+import copy
+import grpc
+import sys
+import types
+import string
 
+from threading import Event
 from tqdm import tqdm as ProgressDisplay
 import numpy as np
 
@@ -16,6 +24,16 @@ from ..logger import logger
 from ..mobject.mobject import Mobject
 from ..scene.scene_file_writer import SceneFileWriter
 from ..utils.iterables import list_update
+from ..grpc.gen import renderserver_pb2
+from ..grpc.gen import renderserver_pb2_grpc
+from ..grpc.impl.frame_server_impl import FrameServer
+
+
+def get_random_name(name_map):
+    while True:
+        random_name = "".join(random.sample(string.ascii_lowercase, k=10))
+        if random_name not in name_map:
+            return random_name
 
 
 class Scene(Container):
@@ -51,10 +69,11 @@ class Scene(Container):
         "random_seed": 0,
     }
 
-    def __init__(self, **kwargs):
+    def __init__(self, frame_server=None, **kwargs):
         Container.__init__(self, **kwargs)
         self.camera = self.camera_class(**camera_config)
-        self.file_writer = SceneFileWriter(self, **file_writer_config,)
+        if self.camera.use_js_renderer:
+            self.frame_server = frame_server
 
         self.mobjects = []
         # TODO, remove need for foreground mobjects
@@ -67,13 +86,83 @@ class Scene(Container):
             np.random.seed(self.random_seed)
 
         self.setup()
+        if self.camera.use_js_renderer:
+            self.animation_finished = Event()
+            self.tear_down_scene = Event()
+            self.renderer_waiting = False
+        else:
+            self.file_writer = SceneFileWriter(self, **file_writer_config,)
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            if type(v) in [FrameServer, Event, Camera]:
+                continue
+            setattr(result, k, copy.deepcopy(v, memo))
+
+        # Update updaters
+        for mobject in self.mobjects:
+            cloned_updaters = []
+            for updater in mobject.updaters:
+                # Make the cloned updater use the cloned Mobjects as free variables
+                # rather than the original ones.
+                # TODO: The the same for function calls recursively.
+                free_variable_map = inspect.getclosurevars(updater).nonlocals
+                cloned_co_freevars = []
+                cloned_closure = []
+                for i, free_variable_name in enumerate(updater.__code__.co_freevars):
+                    free_variable_value = free_variable_map[free_variable_name]
+                    if isinstance(free_variable_value, Mobject):
+                        random_name = get_random_name(free_variable_map)
+
+                        # Put the cloned Mobject in the function's scope.
+                        free_variable_map[random_name] = memo[id(free_variable_value)]
+
+                        # Add the cloned Mobject's name to the free variable list.
+                        cloned_co_freevars.append(random_name)
+
+                        # Add a cell containing the cloned Mobject's reference to the
+                        # closure list.
+                        cloned_closure.append(
+                            types.CellType(memo[id(free_variable_value)])
+                        )
+                    else:
+                        cloned_co_freevars.append(free_variable_name)
+                        cloned_closure.append(updater.__closure__[i])
+
+                cloned_updater = types.FunctionType(
+                    updater.__code__.replace(co_freevars=tuple(cloned_co_freevars)),
+                    updater.__globals__,
+                    updater.__name__,
+                    updater.__defaults__,
+                    tuple(cloned_closure),
+                )
+                cloned_updaters.append(cloned_updater)
+            memo[id(mobject)].updaters = cloned_updaters
+        return result
+
+    def render(self):
         try:
             self.construct()
         except EndSceneEarlyException:
             pass
-        self.tear_down()
-        self.file_writer.finish()
-        self.print_end_message()
+
+        if self.camera.use_js_renderer:
+            self.frame_server.scene_finished = True
+            with grpc.insecure_channel("localhost:50052") as channel:
+                stub = renderserver_pb2_grpc.RenderServerStub(channel)
+                try:
+                    request = renderserver_pb2.ManimStatusRequest(scene_finished=True)
+                    stub.ManimStatus(request)
+                except grpc._channel._InactiveRpcError as e:
+                    logger.error(e)
+            self.tear_down_scene.wait()
+        else:
+            self.tear_down()
+            self.file_writer.finish()
+            self.print_end_message()
 
     def setup(self):
         """
@@ -161,7 +250,7 @@ class Scene(Container):
             NumPy array of pixel values of each pixel in screen.
             The shape of the array is height x width x 3
         """
-        return np.array(self.camera.get_pixel_array())
+        return np.array(self.camera.get_pixel_array()), self.camera.serialized_frame
 
     def get_image(self):
         """
@@ -216,9 +305,10 @@ class Scene(Container):
         self,
         mobjects=None,
         background=None,
+        serialized_background=None,
         include_submobjects=True,
         ignore_skipping=True,
-        **kwargs,
+        **kwargs
     ):
         """
         Parameters:
@@ -241,12 +331,16 @@ class Scene(Container):
         if mobjects is None:
             mobjects = list_update(self.mobjects, self.foreground_mobjects,)
         if background is not None:
+            assert serialized_background is not None
             self.set_camera_pixel_array(background)
+            self.camera.serialized_frame = copy.deepcopy(serialized_background)
         else:
-            self.reset_camera()
+            assert serialized_background is None
+            self.camera.reset()
+            self.camera.serialized_frame = []
 
         kwargs["include_submobjects"] = include_submobjects
-        self.capture_mobjects_in_camera(mobjects, **kwargs)
+        self.camera.capture_mobjects(mobjects, **kwargs)
 
     def freeze_background(self):
         self.update_frame()
@@ -720,8 +814,7 @@ class Scene(Container):
         ProgressDisplay
             The CommandLine Progress Bar.
         """
-        run_time = self.get_run_time(animations)
-        time_progression = self.get_time_progression(run_time)
+        time_progression = self.get_time_progression(self.run_time)
         time_progression.set_description(
             "".join(
                 [
@@ -853,9 +946,13 @@ class Scene(Container):
         def wrapper(self, *args, **kwargs):
             self.update_skipping_status()
             allow_write = not file_writer_config["skip_animations"]
-            self.file_writer.begin_animation(allow_write)
+            if not self.camera.use_js_renderer:
+                self.file_writer.begin_animation(allow_write)
+
             func(self, *args, **kwargs)
-            self.file_writer.end_animation(allow_write)
+
+            if not self.camera.use_js_renderer:
+                self.file_writer.end_animation(allow_write)
             self.num_plays += 1
 
         return wrapper
@@ -883,7 +980,9 @@ class Scene(Container):
                 self.add(mob)
                 curr_mobjects += mob.get_family()
 
-    def progress_through_animations(self, animations):
+    def progress_through_animations(
+        self, static_image, static_image_serialization, moving_mobjects
+    ):
         """
         This method progresses through each animation
         in the list passed and and updates the frames as required.
@@ -893,22 +992,19 @@ class Scene(Container):
         animations : list
             List of involved animations.
         """
-        # Paint all non-moving objects onto the screen, so they don't
-        # have to be rendered every frame
-        moving_mobjects = self.get_moving_mobjects(*animations)
-        self.update_frame(excluded_mobjects=moving_mobjects)
-        static_image = self.get_frame()
-        last_t = 0
-        for t in self.get_animation_time_progression(animations):
-            dt = t - last_t
-            last_t = t
-            for animation in animations:
-                animation.update_mobjects(dt)
-                alpha = t / animation.run_time
-                animation.interpolate(alpha)
-            self.update_mobjects(dt)
-            self.update_frame(moving_mobjects, static_image)
-            self.add_frames(self.get_frame())
+        for t in self.get_animation_time_progression(self.animations):
+            self.update_animation_to_time(t)
+            self.update_frame(moving_mobjects, static_image, static_image_serialization)
+            self.add_frames(*self.get_frame())
+
+    def update_animation_to_time(self, t):
+        dt = t - self.last_t
+        self.last_t = t
+        for animation in self.animations:
+            animation.update_mobjects(dt)
+            alpha = t / animation.run_time
+            animation.interpolate(alpha)
+        self.update_mobjects(dt)
 
     def finish_animations(self, animations):
         """
@@ -945,10 +1041,31 @@ class Scene(Container):
         if len(args) == 0:
             warnings.warn("Called Scene.play with no animations")
             return
-        animations = self.compile_play_args_to_animation_list(*args, **kwargs)
-        self.begin_animations(animations)
-        self.progress_through_animations(animations)
-        self.finish_animations(animations)
+        self.animations = self.compile_play_args_to_animation_list(*args, **kwargs)
+        self.begin_animations(self.animations)
+
+        # Paint all non-moving objects onto the screen, so they don't
+        # have to be rendered every frame
+        self.moving_mobjects = self.get_moving_mobjects(*self.animations)
+        self.update_frame(excluded_mobjects=self.moving_mobjects)
+        self.static_image, self.static_image_serialization = self.get_frame()
+        self.last_t = 0
+        self.run_time = self.get_run_time(self.animations)
+
+        if self.camera.use_js_renderer:
+            self.frame_server.keyframes.append(copy.deepcopy(self))
+            self.animation_finished.clear()
+            if self.renderer_waiting:
+                with grpc.insecure_channel("localhost:50052") as channel:
+                    stub = renderserver_pb2_grpc.RenderServerStub(channel)
+                    stub.AnimationStatus(renderserver_pb2.AnimationStatusRequest())
+            self.animation_finished.wait()
+        else:
+            self.progress_through_animations(
+                self.static_image, self.static_image_serialization, self.moving_mobjects
+            )
+
+        self.finish_animations(self.animations)
 
     def idle_stream(self):
         """
@@ -1049,30 +1166,42 @@ class Scene(Container):
             The scene, after waiting.
         """
         self.update_mobjects(dt=0)  # Any problems with this?
-        if self.should_update_mobjects():
-            time_progression = self.get_wait_time_progression(duration, stop_condition)
-            # TODO, be smart about setting a static image
-            # the same way Scene.play does
-            last_t = 0
-            for t in time_progression:
-                dt = t - last_t
-                last_t = t
-                self.update_mobjects(dt)
-                self.update_frame()
-                self.add_frames(self.get_frame())
-                if stop_condition is not None and stop_condition():
-                    time_progression.close()
-                    break
-        elif file_writer_config["skip_animations"]:
-            # Do nothing
-            return self
+        self.animations = []
+        self.duration = duration
+        self.stop_condition = stop_condition
+        self.last_t = 0
+
+        if self.camera.use_js_renderer:
+            self.frame_server.keyframes.append(copy.deepcopy(self))
+            self.animation_finished.clear()
+            if self.renderer_waiting:
+                with grpc.insecure_channel("localhost:50052") as channel:
+                    stub = renderserver_pb2_grpc.RenderServerStub(channel)
+                    stub.AnimationStatus(renderserver_pb2.AnimationStatusRequest())
+            self.animation_finished.wait()
         else:
-            self.update_frame()
-            dt = 1 / self.camera.frame_rate
-            n_frames = int(duration / dt)
-            frame = self.get_frame()
-            self.add_frames(*[frame] * n_frames)
-        return self
+            if self.should_update_mobjects():
+                time_progression = self.get_wait_time_progression(
+                    duration, stop_condition
+                )
+                # TODO, be smart about setting a static image
+                # the same way Scene.play does
+                for t in time_progression:
+                    self.update_animation_to_time(t)
+                    self.update_frame()
+                    self.add_frames(*self.get_frame())
+                    if stop_condition is not None and stop_condition():
+                        time_progression.close()
+                        break
+            elif self.skip_animations:
+                # Do nothing
+                return self
+            else:
+                # TODO: Add stop_condition logic
+                self.update_frame()
+                dt = 1 / self.camera.frame_rate
+                self.add_frames(*self.get_frame(), num_frames=int(duration / dt))
+            return self
 
     def wait_until(self, stop_condition, max_time=60):
         """
@@ -1121,7 +1250,7 @@ class Scene(Container):
             self.SKIP_ANIMATIONS = self.original_skipping_status
         return self
 
-    def add_frames(self, *frames):
+    def add_frames(self, frame, serialized_frame, num_frames=1):
         """
         Adds a frame to the video_file_stream
 
@@ -1131,11 +1260,18 @@ class Scene(Container):
             The frames to add, as pixel arrays.
         """
         dt = 1 / self.camera.frame_rate
-        self.increment_time(len(frames) * dt)
+        self.increment_time(num_frames * dt)
         if file_writer_config["skip_animations"]:
             return
-        for frame in frames:
-            self.file_writer.write_frame(frame)
+        if self.camera.use_js_renderer:
+            if num_frames != 1:
+                duration = num_frames / self.camera.frame_rate
+            else:
+                duration = 0
+            return self.camera.serialized_frame, duration
+        else:
+            for _ in range(num_frames):
+                self.file_writer.write_frame(frame)
 
     def add_sound(self, sound_file, time_offset=0, gain=None, **kwargs):
         """
